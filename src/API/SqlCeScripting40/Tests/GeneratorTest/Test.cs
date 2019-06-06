@@ -5,30 +5,32 @@ using ErikEJ.SqlCeScripting;
 using System.Collections.Generic;
 using ErikEJ.SQLiteScripting;
 using System.Text.RegularExpressions;
+using System.Data.SqlClient;
+using System.Text;
 
-
+namespace Tests.GeneratorTest
+{
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1709:IdentifiersShouldBeCasedCorrectly", MessageId = "Ce"), TestFixture]
     public class SqlCeScriptingTestFixture
     {
         private enum SchemaType
-        { 
+        {
             NoConstraints,
             FullConstraints,
             FullNoIdentity,
             DataReaderTest
         }
 
-        private const string dbPath = @"C:\Code\SqlCeToolbox\src\API\SqlCeScripting40\Tests\";
-        private string chinookSQLiteConnectionString = string.Format(
-                @"Data Source={0}chinook.db", dbPath);
-        private string dtoConnectionString = string.Format(
-            @"Data Source={0}dto.db", dbPath);
-        private string infoConnectionString = string.Format(
-            @"Data Source={0}inf2700_orders-1.db", dbPath);
-        private string db21Conn = string.Format(
-            @"Data Source={0}DB21.sqlite", dbPath);
+        private static string dbPath = Directory.GetCurrentDirectory();
 
-    private const string sdfConnectionString = @"Data Source=C:\data\sqlce\test\ams40.sdf;Max Database Size=512";
+        private string chinookSQLiteConnectionString = $"Data Source={Path.Combine(dbPath, "chinook.db")}";
+        private string dtoConnectionString = $"Data Source={Path.Combine(dbPath, "dto.db")}";
+        private string infoConnectionString = $"Data Source={Path.Combine(dbPath, "inf2700_orders-1.db")}";
+        private string db21Conn = $"Data Source={Path.Combine(dbPath, "DB21.sqlite")}";
+        private string northwindConn = $"Data Source={Path.Combine(dbPath, "Northwind.sdf")}";
+        private string umbracoConn = $"Data Source={Path.Combine(dbPath, "UmbracoSqlCe.sdf")}";
+
+        private const string sdfConnectionString = @"Data Source=C:\data\sqlce\test\ams40.sdf;Max Database Size=512";
         private const string sdfConnectionString2 = @"Data Source=C:\data\sqlce\test\PFIZER_DB40.sdf";
         private const string serverConnectionString = @"data source=.;Initial Catalog=AdventureWorksLT2012;Integrated Security=true";
         private const string serverAWConnectionString = @"data source=(localdb)\Mssqllocaldb;Initial Catalog=AdventureWorks2014;Integrated Security=true";
@@ -40,6 +42,17 @@ using System.Text.RegularExpressions;
         private const string chinookConnectionString = @"Data Source=C:\projects\Chinook\Chinook40.sdf;";
         private const string migrateConnectionString = @"data source=.\SQL2008R2;Initial Catalog=MigrateTest;Integrated Security=true";
 
+        [Test]
+        public void TestGetAllColumns()
+        {
+            var list = new List<Column>();
+            using (IRepository repo = new DB4Repository(northwindConn))
+            {
+                list = repo.GetAllColumns();
+            }
+            Assert.AreEqual(74, list.Count);
+            Assert.AreEqual("int", list[0].DataType);
+        }
 
         [Test]
         public void TestServerMigration()
@@ -64,6 +77,29 @@ using System.Text.RegularExpressions;
             using (IRepository sourceRepository = new ServerDBRepository4(serverAWConnectionString))
             {
                 var generator = new Generator4(sourceRepository, path);
+                generator.ScriptDatabaseToFile(Scope.SchemaData);
+            }
+        }
+
+        [Test]
+        public void TestExportToSqlServer()
+        {
+            var path = @"C:\temp\testnw.sql";
+            using (var sourceRepository = new DB4Repository(northwindConn))
+            {
+                var generator = new Generator4(sourceRepository, path);
+                generator.ScriptDatabaseToFile(Scope.SchemaData);
+            }
+        }
+
+        [Test]
+        public void TestExportToSqlServer2()
+        {
+            var path = @"C:\temp\testum.sql";
+            using (var sourceRepository = new DB4Repository(umbracoConn))
+            {
+                var generator = new Generator4(sourceRepository, path, false, false, false);
+                generator.ExcludeTables(new List<string>());
                 generator.ScriptDatabaseToFile(Scope.SchemaData);
             }
         }
@@ -124,7 +160,7 @@ using System.Text.RegularExpressions;
                 generator.GenerateTableScript("Album");
                 var result = generator.GeneratedScript;
                 var lines = Regex.Split(result, "\r\n|\r|\n");
-                Assert.IsTrue(lines.Length == 11);
+                Assert.AreEqual(10, lines.Length, result);
             }
         }
 
@@ -138,7 +174,7 @@ using System.Text.RegularExpressions;
                 generator.GenerateTableScript("Users");
                 var result = generator.GeneratedScript;
                 var lines = Regex.Split(result, "\r\n|\r|\n");
-                Assert.IsTrue(lines.Length == 11);
+                Assert.AreEqual(18, lines.Length, result);
             }
         }
 
@@ -151,7 +187,7 @@ using System.Text.RegularExpressions;
                 generator.GenerateSqliteNetModel("Test");
                 var result = generator.GeneratedScript;
                 var lines = Regex.Split(result, "\r\n|\r|\n");
-                Assert.AreEqual(291, lines.Length);
+                Assert.AreEqual(291, lines.Length, result);
             }
         }
 
@@ -219,7 +255,7 @@ GO
                 Assert.IsTrue(ds.Tables.Count > 0);
                 Assert.IsTrue(ds.Tables[0].Rows.Count > 0);
             }
-          
+
         }
 
         [Test]
@@ -287,7 +323,7 @@ GO";
         [Test]
         public void TestServerDgml()
         {
-            using (IRepository sourceRepository = new  ServerDBRepository4(serverAWConnectionString, true))
+            using (IRepository sourceRepository = new ServerDBRepository4(serverAWConnectionString, true))
             {
                 var exclusions = new List<string>();
                 exclusions.Add("dbo.BuildVersion");
@@ -297,31 +333,31 @@ GO";
             }
         }
 
-    [Test]
-    public void TestServerHierarchyIdSQLite()
-    {
-        using (IRepository sourceRepository = new ServerDBRepository4(serverHIDConnectionString))
+        [Test]
+        public void TestServerHierarchyIdSQLite()
         {
-            var exclusions = new List<string>();            
-            var generator = new Generator4(sourceRepository, @"C:\code\test2.sql");
-            generator.ExcludeTables(exclusions);
-            generator.ScriptDatabaseToFile(Scope.SchemaDataSQLite);
+            using (IRepository sourceRepository = new ServerDBRepository4(serverHIDConnectionString))
+            {
+                var exclusions = new List<string>();
+                var generator = new Generator4(sourceRepository, @"C:\code\test2.sql");
+                generator.ExcludeTables(exclusions);
+                generator.ScriptDatabaseToFile(Scope.SchemaDataSQLite);
+            }
         }
-    }
 
-    [Test]
-    public void TestServerHierarchyIdSqlCe()
-    {
-        using (IRepository sourceRepository = new ServerDBRepository4(serverHIDConnectionString))
+        [Test]
+        public void TestServerHierarchyIdSqlCe()
         {
-            var exclusions = new List<string>();
-            var generator = new Generator4(sourceRepository, @"C:\code\test2.sql");
-            generator.ExcludeTables(exclusions);
-            generator.ScriptDatabaseToFile(Scope.SchemaData);
+            using (IRepository sourceRepository = new ServerDBRepository4(serverHIDConnectionString))
+            {
+                var exclusions = new List<string>();
+                var generator = new Generator4(sourceRepository, @"C:\code\test2.sql");
+                generator.ExcludeTables(exclusions);
+                generator.ScriptDatabaseToFile(Scope.SchemaData);
+            }
         }
-    }
 
-    [Test]
+        [Test]
         public void TestGraphSort()
         {
             using (IRepository sourceRepository = new DB4Repository(sdfConnectionString))
@@ -382,7 +418,7 @@ GO";
         {
             string source = @"Data Source=C:\projects\ChinookPart2\Chinook40Modified.sdf";
             string target = @"Data Source=C:\projects\ChinookPart2\Chinook40.sdf";
-            
+
             string modPath = @"C:\projects\ChinookPart2\Chinook40Modified.sdf";
             if (File.Exists(modPath))
                 File.Delete(modPath);
@@ -433,7 +469,7 @@ GO";
             string path = helper.PathFromConnectionString(test);
             Assert.AreEqual(path, "(LocalDB)\\MSSQLLocalDB.AzureStorageEmulatorDb51.mdf");
         }
-    
+
         [Test]
         public void TestDataGenWithWhere()
         {
@@ -496,7 +532,7 @@ GO";
         {
             //cloud_service_product_infos
             //;DateFormatString=yyyy-MM-dd HH:mm:ss zzz
-            using (IRepository sourceRepository = new SQLiteRepository(@"Data Source=C:\Code\SqlCeToolbox\src\API\SqlCeScripting40\Tests\chinook.db"))
+            using (IRepository sourceRepository = new SQLiteRepository(chinookSQLiteConnectionString))
             {
                 var generator = new Generator4(sourceRepository, "sw.sql", false, false, true);
                 generator.GenerateTableCreate("Artist");
@@ -510,7 +546,7 @@ GO";
             var helper = new SqlCeHelper4();
 
             var result = helper.IsV40Installed();
-            
+
             Assert.AreEqual(null, result);
         }
 
@@ -585,7 +621,152 @@ GO";
         //    }
         //}
 
+        [Test]
+        public void GenerateDatabaseScript_FromMsSqlToSqlite_IncludesFilteredIndex()
+        {
+            string createTableQuery =
+                @"CREATE TABLE [Test]
+                (
+                     [TestId]  BIGINT         IDENTITY (1, 1) NOT NULL,
+                     [Column1] nvarchar(256)  NULL
+                );
+                CREATE UNIQUE INDEX [Test_UK_Test_Column1] ON [Test] ([Column1] ASC) WHERE ([Column1] IS NOT NULL);";
 
+            string expectedSql = string.Join(Environment.NewLine, new[]
+            {
+                "CREATE TABLE [Test] (",
+                "  [TestId] INTEGER NOT NULL",
+                ", [Column1] nvarchar(256) NULL COLLATE NOCASE",
+                ");",
+                "CREATE UNIQUE INDEX [Test_Test_UK_Test_Column1] ON [Test] ([Column1] ASC) WHERE ([Column1] IS NOT NULL);"
+            });
 
+            AssertMsSqlToSqliteGeneratorContains(createTableQuery, "Test", expectedSql);
+        }
+
+        [Test]
+        public void GenerateDatabaseScript_FromMsSqlToSqlite_IdentityColumn()
+        {
+            string createTableQuery =
+                @"CREATE TABLE [Test]
+                (
+                        [TestId]  BIGINT         IDENTITY NOT NULL,
+                        [Column1] nvarchar(256)  NULL
+                );";
+
+            string expectedSql = string.Join(Environment.NewLine, new[]
+            {
+                "CREATE TABLE [Test] (",
+                "  [TestId] INTEGER NOT NULL",
+                ", [Column1] nvarchar(256) NULL COLLATE NOCASE",
+                ")"
+            });
+
+            AssertMsSqlToSqliteGeneratorContains(createTableQuery, "Test", expectedSql);
+        }
+
+        [Test]
+        public void GenerateDatabaseScript_FromMsSqlToSqlite_IdentityPrimaryKeyColumn()
+        {
+            string createTableQuery =
+                @"CREATE TABLE [Test]
+                (
+                        [TestId]  BIGINT         IDENTITY NOT NULL,
+                        [Column1] nvarchar(256)  NULL,
+                        CONSTRAINT [PK_Test] PRIMARY KEY CLUSTERED ([TestId] ASC)
+                );";
+
+            string expectedSql = string.Join(Environment.NewLine, new[]
+            {
+                "CREATE TABLE [Test] (",
+                "  [TestId] INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL",
+                ", [Column1] nvarchar(256) NULL COLLATE NOCASE",
+                ")"
+            });
+
+            AssertMsSqlToSqliteGeneratorContains(createTableQuery, "Test", expectedSql);
+        }
+
+        [Test]
+        public void GenerateDatabaseScript_FromMsSqlToSqlite_PrimaryKeyColumn()
+        {
+            string createTableQuery =
+                @"CREATE TABLE [Test]
+                (
+                        [TestId]  BIGINT         NOT NULL,
+                        [Column1] nvarchar(256)  NULL,
+                        CONSTRAINT [PK_Test] PRIMARY KEY CLUSTERED ([TestId] ASC)
+                );";
+
+            string expectedSql = string.Join(Environment.NewLine, new[]
+            {
+                "CREATE TABLE [Test] (",
+                "  [TestId] bigint NOT NULL",
+                ", [Column1] nvarchar(256) NULL COLLATE NOCASE",
+                ", CONSTRAINT [PK_Test] PRIMARY KEY ([TestId])",
+                ")"
+            });
+
+            AssertMsSqlToSqliteGeneratorContains(createTableQuery, "Test", expectedSql);
+        }
+
+        private void AssertMsSqlToSqliteGeneratorContains(string createTableQuery, string tableName, string expectedSql)
+        {
+            // connect to database server
+            string connectionString = @"Data Source=.\sqlexpress;Integrated Security=SSPI;";
+
+            // create a new random database name
+            string databaseName = this.RandomString(10);
+            using (SqlConnection sqlConnection = new SqlConnection(connectionString))
+            {
+                sqlConnection.Open();
+
+                while (sqlConnection.DatabaseExists(databaseName))
+                {
+                    // create a new random database name
+                    databaseName = this.RandomString(10);
+                }
+
+                using (TempDatabase tempDatabase = new TempDatabase(sqlConnection, databaseName))
+                {
+                    using (SqlConnection tempSqlConnection = new SqlConnection(tempDatabase.ConnectionString))
+                    {
+                        tempSqlConnection.Open();
+
+                        tempSqlConnection.Execute(createTableQuery);
+                    }
+
+                    string sql = null;
+
+                    using (var repository = new ServerDBRepository4(tempDatabase.ConnectionString, false))
+                    {
+                        Generator4 generator = new Generator4(
+                            repository,
+                            null,
+                            false,
+                            false,
+                            true);
+                        generator.GenerateTableScript(tableName);
+                        sql = generator.GeneratedScript;
+                    }
+
+                    Assert.IsTrue(sql.Contains(expectedSql), sql);
+                }
+            }
+        }
+
+        private string RandomString(int size)
+        {
+            StringBuilder builder = new StringBuilder();
+            Random random = new Random();
+            char ch;
+            for (int i = 1; i < size + 1; i++)
+            {
+                ch = Convert.ToChar(Convert.ToInt32(Math.Floor(26 * random.NextDouble() + 65)));
+                builder.Append(ch);
+            }
+
+            return builder.ToString();
+        }
     }
-
+}

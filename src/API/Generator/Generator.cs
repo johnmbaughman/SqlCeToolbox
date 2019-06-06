@@ -28,6 +28,7 @@ namespace ErikEJ.SqlCeScripting
         private StringBuilder _sbScript;
         private String _sep = "GO" + Environment.NewLine;
         private List<string> _tableNames;
+        private List<string> _whereClauses; // must be of the same length as _tableNames
         private Int32 _fileCounter = -1;
         private List<Column> _allColumns;
         private List<Constraint> _allForeignKeys;
@@ -153,26 +154,68 @@ namespace ErikEJ.SqlCeScripting
         public void ExcludeTables(IList<string> tablesToExclude)
         {
             var allTables = _repository.GetAllTableNamesForExclusion();
-
             foreach (string tableToExclude in tablesToExclude)
             {
                 allTables.Remove(tableToExclude);
             }
-            var finalTables = new List<string>();
-            foreach (string table in allTables)
+            FinalizeTableNames(allTables, Enumerable.Empty<TableParameter>());
+        }
+
+        public void IncludeTables(IList<string> tablesToInclude, IList<string> whereClauses)
+        {
+            if (tablesToInclude.Count != whereClauses.Count)
             {
-                finalTables.Add(GetLocalName(table));
+                throw new ArgumentException(string.Format(CultureInfo.InvariantCulture, "Numbers of elements in {0} and {1} do not match", nameof(tablesToInclude), nameof(whereClauses)));
+            }
+            var tablesAndWhereClauses = tablesToInclude
+                .Zip(whereClauses, (table, whereClause) => new TableParameter(table, whereClause))
+                .ToArray();
+
+            var allTables = _repository.GetAllTableNamesForExclusion(); // Probably need to add another method for inclusion or rename the existing one
+            allTables = allTables.Where(tableName => tablesToInclude.Contains(tableName)).ToList();
+            FinalizeTableNames(allTables, tablesAndWhereClauses);
+        }
+
+        private void FinalizeTableNames(IList<string> tablesNamesToAssign, IEnumerable<TableParameter> tableParameters)
+        {
+            var finalTables = new List<string>();
+            _whereClauses = new List<string>();
+            foreach (string table in tablesNamesToAssign)
+            {
+                var localName = GetLocalName(table);
+                finalTables.Add(localName);
+                var tableParam = tableParameters.FirstOrDefault(x => x.TableName == table);
+                if (tableParam != null)
+                {
+                    tableParam.TableName = localName;
+                    _whereClauses.Add(tableParam.WhereClause);
+                }
+                else
+                {
+                    _whereClauses.Add(null);
+                }
             }
             _tableNames = finalTables;
             try
             {
                 var sortedTables = new List<string>();
+                var whereClauses = new List<string>();
                 var g = FillSchemaDataSet(finalTables).ToGraph();
                 foreach (var table in g.TopologicalSort())
                 {
                     sortedTables.Add(table.TableName);
+                    var tableParam = tableParameters.FirstOrDefault(x => x.TableName == table.TableName);
+                    if (tableParam != null)
+                    {
+                        whereClauses.Add(tableParam.WhereClause);
+                    }
+                    else
+                    {
+                        whereClauses.Add(null);
+                    }
                 }
                 _tableNames = sortedTables;
+                _whereClauses = whereClauses;
             }
             catch (QuickGraph.NonAcyclicGraphException)
             {
@@ -668,7 +711,7 @@ namespace ErikEJ.SqlCeScripting
         /// <param name="viewName">Name of the view.</param>
         public void GenerateViewSelect(string viewName)
         {
-            View view =  _allViews.Where(c => c.ViewName == viewName).SingleOrDefault();
+            View view = _allViews.Where(c => c.ViewName == viewName).SingleOrDefault();
             if (view.ViewName != null)
             {
                 _sbScript.Append(view.Select);
@@ -1124,6 +1167,16 @@ namespace ErikEJ.SqlCeScripting
             {
                 if (_sqlite)
                 {
+                    if (primaryKeys.Count == 1)
+                    {
+                        Column column = _allColumns.Single(c => c.TableName == tableName && c.ColumnName == primaryKeys[0].ColumnName);
+                        if (column.DataType == "INTEGER PRIMARY KEY AUTOINCREMENT")
+                        {
+                            // primary key already defined in the column line
+                            return;
+                        }
+                    }
+
                     _sbScript.AppendFormat("{0}, CONSTRAINT [{1}] PRIMARY KEY (", Environment.NewLine, primaryKeys[0].KeyName);
                 }
                 else
@@ -1168,9 +1221,9 @@ namespace ErikEJ.SqlCeScripting
         /// <param name="tableName">Name of the table.</param>
         public void GenerateForeignKeys(string tableName)
         {
-            List<Constraint> foreingKeys = _allForeignKeys.Where(fk => fk.ConstraintTableName == tableName).ToList();
+            List<Constraint> foreignKeys = _allForeignKeys.Where(fk => fk.ConstraintTableName == tableName).ToList();
 
-            foreach (Constraint constraint in foreingKeys)
+            foreach (Constraint constraint in foreignKeys)
             {
                 if (_sqlite)
                 {
@@ -1228,8 +1281,8 @@ namespace ErikEJ.SqlCeScripting
         /// <param name="indexName">Name of the index.</param>
         public void GenerateIndexDrop(string tableName, string indexName)
         {
-            var tableIndexes = _repository.IsServer() 
-                ? _repository.GetIndexesFromTable(tableName) 
+            var tableIndexes = _repository.IsServer()
+                ? _repository.GetIndexesFromTable(tableName)
                 : _allIndexes.Where(i => i.TableName == tableName).ToList();
 
             var indexesByName = tableIndexes
@@ -1464,6 +1517,7 @@ namespace ErikEJ.SqlCeScripting
                     }
                     GenerateIndex();
                     GenerateTriggers(_allTriggers);
+                    GenerateTriggersForForeignKeys();
                     GenerateViews();
                 }
                 GenerateSqliteSuffix();
@@ -1498,6 +1552,90 @@ namespace ErikEJ.SqlCeScripting
                 }
             }
             Helper.WriteIntoFile(GeneratedScript, _outFile, FileCounter, _sqlite);
+        }
+
+        private void GenerateTriggersForForeignKeys()
+        {
+            foreach (string tableName in _tableNames)
+            {
+                GenerateTriggersForForeignKeys(tableName);
+            }
+        }
+
+        private void GenerateTriggersForForeignKeys(string tableName)
+        {
+            List<Constraint> foreignKeys = _allForeignKeys.Where(fk => fk.ConstraintTableName == tableName).ToList();
+
+            foreach (Constraint constraint in foreignKeys)
+            {
+                GenerateInsertTriggerForForeignKey(constraint);
+                GenerateUpdateTriggerForForeignKey(constraint);
+            }
+        }
+
+        private void GenerateInsertTriggerForForeignKey(Constraint constraint)
+        {
+            GenerateTriggerForForeignKey("fki", TriggerType.Insert, constraint);
+        }
+
+        private void GenerateUpdateTriggerForForeignKey(Constraint constraint)
+        {
+            GenerateTriggerForForeignKey("fku", TriggerType.Update, constraint);
+        }
+
+        private void GenerateTriggerForForeignKey(string prefix, string triggerType, Constraint constraint)
+        {
+            string constraintName = constraint.ConstraintName;
+            string tableName = constraint.ConstraintTableName;
+            string foreignTableName = constraint.UniqueConstraintTableName;
+
+            string columnName = constraint.Columns[0];
+            Column column = _allColumns.Single(c => c.TableName == tableName && c.ColumnName == RemoveBrackets(columnName));
+
+            string foreignColumnName = constraint.UniqueColumns[0];
+            Column foreignColumn = _allColumns.Single(c => c.TableName == foreignTableName && c.ColumnName == RemoveBrackets(foreignColumnName));
+
+            string triggerName = prefix + "_" + tableName + "_" + RemoveBrackets(columnName) + "_" + foreignTableName + "_" + RemoveBrackets(foreignColumnName);
+
+            _sbScript.Append(
+                $"CREATE TRIGGER [{triggerName}] BEFORE {triggerType} ON [{tableName}] FOR EACH ROW BEGIN" +
+                $" SELECT RAISE(ROLLBACK, '{triggerType} on table {tableName} violates foreign key constraint {constraintName}')" +
+                " WHERE ");
+
+            if (column.IsNullable == YesNoOption.YES)
+            {
+                _sbScript.Append(string.Join(" ", constraint.Columns.Select(x => $"NEW.{x} IS NOT NULL AND").ToArray()));
+            }
+
+            _sbScript.Append($"(SELECT {string.Join(", ", constraint.UniqueColumns.ToArray())} FROM {foreignTableName} WHERE ");
+
+            for (int i = 0; i < constraint.Columns.Count; i++)
+            {
+                int j = i;
+                if (j > constraint.UniqueColumns.Count - 1)
+                {
+                    // different foreign keys are using the same columns from the same table
+                    // re-use the last foreign column name
+                    j = constraint.UniqueColumns.Count - 1;
+                }
+
+                _sbScript.Append($" {constraint.UniqueColumns[j]} = NEW.{constraint.Columns[i]}");
+
+                if (i < constraint.Columns.Count - 1)
+                {
+                    _sbScript.Append(" AND");
+                }
+            }
+
+            _sbScript.Append(") IS NULL;");
+            _sbScript.AppendLine(" END;");
+        }
+
+        private class TriggerType
+        {
+            public const string Insert = "Insert";
+
+            public const string Update = "Update";
         }
 
         public IList<string> GeneratedFiles
@@ -1646,7 +1784,7 @@ namespace ErikEJ.SqlCeScripting
         {
             string line;
 
-            string colDefault = col.ColumnHasDefault ? " DEFAULT " + col.ColumnDefault : string.Empty;
+            string colDefault = col.ColumnHasDefault ? " DEFAULT (" + col.ColumnDefault + ")" : string.Empty;
             if (_sqlite && col.ColumnHasDefault)
             {
                 if (col.ColumnDefault.ToLowerInvariant().Contains("newid()"))
@@ -1713,35 +1851,42 @@ namespace ErikEJ.SqlCeScripting
                     break;
                 case "int":
                 case "bigint":
-                    // http://www.sqlite.org/lang_createtable.html#rowid
-                    if (_sqlite && col.AutoIncrementBy > 0)
+
+                    string colIdentity = string.Empty;
+                    if (col.AutoIncrementBy > 0)
                     {
-                        col.DataType = "INTEGER";
-                        //Prevent scripting IDENTITY
-                        col.AutoIncrementBy = int.MinValue;
+                        if (_sqlite)
+                        {
+                            // http://www.sqlite.org/lang_createtable.html#rowid
+                            col.DataType = "INTEGER";
+
+                            List<PrimaryKey> primaryKeys = _allPrimaryKeys.Where(p => p.TableName == col.TableName).ToList();
+                            if ((primaryKeys.Count == 1) && (primaryKeys.Select(x => x.ColumnName).Contains(col.ColumnName)))
+                            {
+                                col.DataType += " PRIMARY KEY AUTOINCREMENT";
+                            }
+                        }
+                        else
+                        {
+                            if (includeData)
+                            {
+                                colIdentity = string.Format(CultureInfo.InvariantCulture, " IDENTITY ({0},{1})", col.AutoIncrementNext, col.AutoIncrementBy);
+                            }
+                            else
+                            {
+                                colIdentity = string.Format(CultureInfo.InvariantCulture, " IDENTITY ({0},{1})", col.AutoIncrementSeed, col.AutoIncrementBy);
+                            }
+                        }
                     }
-                    if (includeData)
-                    {
-                        line = string.Format(CultureInfo.InvariantCulture,
-                            "[{0}] {1}{2}{3}{4}"
-                            , col.ColumnName
-                            , col.DataType
-                            , colDefault
-                            , (col.AutoIncrementBy > 0 ? string.Format(CultureInfo.InvariantCulture, " IDENTITY ({0},{1})", col.AutoIncrementNext, col.AutoIncrementBy) : string.Empty)
-                            , colNull
-                            );
-                    }
-                    else
-                    {
-                        line = string.Format(CultureInfo.InvariantCulture,
-                            "[{0}] {1}{2}{3}{4}"
-                            , col.ColumnName
-                            , col.DataType
-                            , colDefault
-                            , (col.AutoIncrementBy > 0 ? string.Format(CultureInfo.InvariantCulture, " IDENTITY ({0},{1})", col.AutoIncrementSeed, col.AutoIncrementBy) : string.Empty)
-                            , colNull
-                            );
-                    }
+
+                    line = string.Format(CultureInfo.InvariantCulture,
+                        "[{0}] {1}{2}{3}{4}"
+                        , col.ColumnName
+                        , col.DataType
+                        , colDefault
+                        , colIdentity
+                        , colNull
+                        );
                     break;
                 default:
                     line = string.Format(CultureInfo.InvariantCulture,
@@ -1758,9 +1903,22 @@ namespace ErikEJ.SqlCeScripting
 
         public void GenerateTableContent(bool saveImageFiles, bool ignoreIdentity = false)
         {
+            if (_whereClauses != null && _tableNames.Count != _whereClauses.Count)
+            {
+                throw new ArgumentException(string.Format(CultureInfo.InvariantCulture, "Numbers of elements in {0} and {1} do not match", nameof(_tableNames), nameof(_whereClauses)));
+            }
+            int index = 0;
             foreach (var tableName in _tableNames)
             {
-                GenerateTableContent(tableName, saveImageFiles, ignoreIdentity);
+                if (_whereClauses != null)
+                {
+                    GenerateTableContent(tableName, saveImageFiles, ignoreIdentity, _whereClauses[index]);
+                }
+                else
+                {
+                    GenerateTableContent(tableName, saveImageFiles, ignoreIdentity);
+                }
+                index++;
             }
         }
 
@@ -2105,7 +2263,15 @@ namespace ErikEJ.SqlCeScripting
                 }
                 // Remove the last comma
                 _sbScript.Remove(_sbScript.Length - 1, 1);
-                _sbScript.AppendLine(");");
+                _sbScript.Append(")");
+
+                if (!string.IsNullOrEmpty(idx.Filter))
+                {
+                    _sbScript.Append($" WHERE {idx.Filter}");
+                }
+
+                _sbScript.Append(";");
+                _sbScript.AppendLine();
                 _sbScript.Append(_sep);
             }
             else

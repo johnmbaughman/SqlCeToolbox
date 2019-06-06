@@ -85,29 +85,6 @@ namespace ErikEJ.SqlCeToolbox.Commands
             }
         }
 
-        public void RenameConnection(object sender, ExecutedRoutedEventArgs e)
-        {
-            var databaseInfo = ValidateMenuInfo(sender);
-            if (databaseInfo == null) return;
-            if (databaseInfo.DatabaseInfo.FromServerExplorer) return;
-            try
-            {
-                var ro = new RenameDialog(databaseInfo.DatabaseInfo.Caption);
-                ro.ShowModal();
-                if (ro.DialogResult.HasValue && ro.DialogResult.Value && !string.IsNullOrWhiteSpace(ro.NewName) && !databaseInfo.DatabaseInfo.Caption.Equals(ro.NewName))
-                {
-                    DataConnectionHelper.RenameDataConnection(databaseInfo.DatabaseInfo.ConnectionString, ro.NewName);
-                    var control = _parentWindow.Content as ExplorerControl;
-                    if (control != null) control.BuildDatabaseTree();
-                    DataConnectionHelper.LogUsage("DatabaseRenameConnection");
-                }
-            }
-            catch (Exception ex)
-            {
-                DataConnectionHelper.SendError(ex, databaseInfo.DatabaseInfo.DatabaseType);
-            }
-        }
-
 #region Maintenance menu items
 
         public void ShrinkDatabase(object sender, ExecutedRoutedEventArgs e)
@@ -480,18 +457,21 @@ namespace ErikEJ.SqlCeToolbox.Commands
                     {
                         serverRepository.ExecuteSqlFile(tempScript);
                     }
-                    else // possibly multiple files - tmp2BB9.tmp_0.sqlce
+                    else // possibly multiple files - tmp2BB9.tmp_0001.sqltb
                     {
                         var count = Directory.GetFiles(Path.GetDirectoryName(scriptRoot), Path.GetFileName(scriptRoot) + "*", SearchOption.AllDirectories).Count();
-                        for (var i = 0; i < 400; i++)
+                        for (var i = 0; i < count + 1; i++)
                         {
-                            package.SetProgress(null, 0, 0);
                             var testFile = string.Format("{0}_{1}{2}", scriptRoot, i.ToString("D4"), ".sqltb");
                             if (File.Exists(testFile))
                             {
                                 serverRepository.ExecuteSqlFile(testFile);
                                 package.SetProgress("Exporting to server...", (uint)i + 1, (uint)count - 1);
                                 TryDeleteFile(testFile);
+                            }
+                            else
+                            {
+                                if (i > 0) break;
                             }
                         }
                         package.SetStatus(null);

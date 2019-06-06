@@ -74,8 +74,9 @@ namespace ErikEJ.SqlCeToolbox
                     }
                 }
             }
-            if (message != null)
-                OutputStringInGeneralPane(message);
+            // Attempt to fix issue with new VS versions #725
+            //if (message != null)
+            //    OutputStringInGeneralPane(message);
         }
 
         private void OutputStringInGeneralPane(string text)
@@ -201,11 +202,6 @@ namespace ErikEJ.SqlCeToolbox
         public static bool VsSupportsEf6()
         {
             return VisualStudioVersion >= new Version(11, 0);
-        }
-
-        public static bool VsSupportsEfCore()
-        {
-            return VisualStudioVersion >= new Version(14, 0);
         }
 
         public bool VsSupportsSimpleDdex4Provider()
